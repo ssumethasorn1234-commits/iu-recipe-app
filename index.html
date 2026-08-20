@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>IU Recipe Work Instruction Web App</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome 6 Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Google Font - Prompt -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Prompt', sans-serif;
+            background-color: #f1f5f9;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* Toast Notifications */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 90%;
+            max-width: 380px;
+            pointer-events: none;
+        }
+        .toast-msg {
+            background: #0f172a;
+            color: white;
+            padding: 12px 18px;
+            border-radius: 14px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.25);
+            opacity: 0;
+            transform: translateY(-20px) scale(0.95);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            pointer-events: auto;
+        }
+        .toast-msg.show { opacity: 1; transform: translateY(0) scale(1); }
+        .toast-success { border-left: 4px solid #22c55e; }
+        .toast-error { border-left: 4px solid #ef4444; }
+        .toast-info { border-left: 4px solid #3b82f6; }
+
+        /* Custom Checkbox */
+        .step-checkbox:checked + div {
+            text-decoration: line-through;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen">
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
+    <!-- Main Mobile/Tablet Frame Container -->
+    <div class="max-w-md mx-auto bg-white min-h-screen shadow-2xl relative flex flex-col border-x border-slate-200" id="app-container">
+        
+        <!-- App Header Bar -->
+        <header class="bg-gradient-to-r from-orange-500 via-amber-500 to-amber-600 text-white p-4 sticky top-0 z-50 shadow-lg">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-2 cursor-pointer" onclick="goHome()">
+                    <div class="w-9 h-9 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center text-lg shadow-inner">
+                        <i class="fa-solid fa-mug-hot"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-base font-bold tracking-tight leading-none">IU Recipes</h1>
+                        <div class="flex items-center gap-1 mt-0.5">
+                            <span id="sync-status" class="text-[10px] bg-white/20 px-2 py-0.5 rounded-full flex items-center gap-1 font-normal">
+                                <i class="fa-solid fa-database text-[9px]" id="sync-icon"></i>
+                                <span id="sync-text">ความจำในเครื่อง</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-1.5">
+                    <button id="search-toggle-btn" onclick="toggleSearch()" class="bg-white/20 hover:bg-white/30 text-white w-9 h-9 rounded-xl transition flex items-center justify-center">
+                        <i class="fa-solid fa-magnifying-glass text-sm"></i>
+                    </button>
+                    <button id="header-action-btn" class="bg-white text-orange-600 hover:bg-orange-50 font-bold w-9 h-9 rounded-xl transition shadow-md flex items-center justify-center">
+                        <i class="fa-solid fa-plus text-sm"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Expandable Search Bar -->
+            <div id="search-bar-container" class="hidden mt-3 transition-all">
+                <div class="relative">
+                    <i class="fa-solid fa-search absolute left-3.5 top-3 text-slate-400 text-xs"></i>
+                    <input type="text" id="search-input" oninput="handleSearch(this.value)" placeholder="ค้นหาชื่อเมนู หรือส่วนผสม..." class="w-full pl-9 pr-8 py-2 bg-white text-slate-800 rounded-xl text-xs outline-none shadow-inner placeholder-slate-400">
+                    <button onclick="clearSearch()" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Dynamic View Container -->
+        <main id="main-content" class="flex-1 overflow-y-auto bg-slate-50 relative hide-scrollbar p-4">
+            <!-- Dynamic Content Will Render Here -->
+        </main>
+
+        <!-- Modal: Backup & Restore Data -->
+        <div id="backup-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+            <div class="bg-white rounded-3xl p-5 w-full max-w-xs shadow-2xl space-y-4">
+                <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-box-archive text-amber-500"></i> สำรอง / ย้ายข้อมูลสูตร
+                    </h3>
+                    <button onclick="closeModal('backup-modal')" class="text-slate-400 hover:text-slate-600 p-1">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 leading-relaxed">คุณสามารถดาวน์โหลดไฟล์สำรองเก็บไว้ หรือนำไฟล์จากเครื่องอื่นมานำเข้าได้ที่นี่</p>
+                <div class="space-y-2">
+                    <button onclick="exportRecipesJSON()" class="w-full py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Export JSON)
+                    </button>
+                    <label class="w-full py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (Import JSON)
+                        <input type="file" accept=".json" class="hidden" onchange="importRecipesJSON(event)">
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Delete Confirmation -->
+        <div id="delete-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+            <div class="bg-white rounded-3xl p-5 w-full max-w-xs shadow-2xl text-center space-y-4">
+                <div class="w-14 h-14 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto text-2xl">
+                    <i class="fa-solid fa-trash-can"></i>
+                </div>
+                <div>
+                    <h3 class="font-bold text-slate-800 text-base">ยืนยันการลบสูตร?</h3>
+                    <p class="text-xs text-slate-500 mt-1" id="delete-recipe-name">เมนูนี้จะถูกลบออกจากระบบอย่างถาวร</p>
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button onclick="closeModal('delete-modal')" class="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200 transition">ยกเลิก</button>
+                    <button id="confirm-delete-btn" class="flex-1 py-2.5 bg-red-500 text-white rounded-xl text-xs font-bold hover:bg-red-600 transition shadow-md">ลบสูตรนี้</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Firebase Modular SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, onSnapshot, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Application State
+        window.recipes = [];
+        window.currentView = 'home'; // 'home', 'editor', 'viewer'
+        window.editingRecipeId = null;
+        window.currentFormData = null;
+        window.searchQuery = '';
+        window.servingMultiplier = 1;
+        window.pendingDeleteId = null;
+        window.db = null;
+        window.auth = null;
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'iu-recipe-app';
+
+        // Safe Storage Helper
+        const memoryStorage = {};
+        window.safeStore = {
+            getItem: (key) => {
+                try { return localStorage.getItem(key); }
+                catch(e) { return memoryStorage[key] || null; }
+            },
+            setItem: (key, val) => {
+                try { localStorage.setItem(key, val); }
+                catch(e) { memoryStorage[key] = val; }
+            }
+        };
+
+        // Firebase Initialization with fallback
+        async function initFirebase() {
+            try {
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = initializeApp(firebaseConfig);
+                    window.auth = getAuth(app);
+                    window.db = getFirestore(app);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(window.auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(window.auth);
+                    }
+
+                    onAuthStateChanged(window.auth, (user) => {
+                        if (user) {
+                            updateSyncStatus('คลาวด์ซิงค์', false, 'cloud');
+                            listenCloudRecipes();
+                        } else {
+                            loadFromLocal();
+                        }
+                    });
+                } else {
+                    loadFromLocal();
+                }
+            } catch (err) {
+                console.warn("Firebase fallback to LocalStorage:", err);
+                loadFromLocal();
+            }
+        }
+
+        // Firestore Real-time Listener
+        function listenCloudRecipes() {
+            if (!window.db || !window.auth.currentUser) return;
+            const recipesCol = collection(window.db, 'artifacts', window.appId, 'public', 'data', 'recipes');
+            
+            onSnapshot(recipesCol, (snapshot) => {
+                const cloudData = [];
+                snapshot.forEach(doc => {
+                    cloudData.push({ id: doc.id, ...doc.data() });
+                });
+                
+                if (cloudData.length > 0) {
+                    window.recipes = cloudData;
+                    window.safeStore.setItem('iu_recipes', JSON.stringify(cloudData));
+                } else {
+                    loadFromLocal();
+                }
+                window.renderApp();
+            }, (error) => {
+                console.warn("Cloud Listener Error:", error);
+                loadFromLocal();
+            });
+        }
+
+        window.generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+
+        window.showToast = (message, type = 'success') => {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = `toast-msg toast-${type}`;
+            const icon = type === 'success' ? 'fa-circle-check text-green-400' : (type === 'error' ? 'fa-circle-exclamation text-red-400' : 'fa-circle-info text-blue-400');
+            toast.innerHTML = `<i class="fa-solid ${icon} text-base"></i> <span>${message}</span>`;
+            container.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        };
+
+        window.updateSyncStatus = (text, isLoading = false, mode = 'local') => {
+            const statusEl = document.getElementById('sync-text');
+            const iconEl = document.getElementById('sync-icon');
+            if (statusEl) statusEl.textContent = text;
+            if (iconEl) {
+                if (isLoading) {
+                    iconEl.className = "fa-solid fa-spinner fa-spin text-[10px]";
+                } else if (mode === 'cloud') {
+                    iconEl.className = "fa-solid fa-cloud text-[10px] text-sky-200";
+                } else {
+                    iconEl.className = "fa-solid fa-database text-[10px] text-amber-200";
+                }
+            }
+        };
+
+        window.escapeHTML = (str) => {
+            if (!str) return '';
+            return String(str).replace(/[&<>'"]/g, tag => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+            }[tag]));
+        };
+
+        window.parseYouTubeUrl = (url) => {
+            if (!url) return '';
+            let raw = url.trim();
+            if (raw.includes('<iframe') && raw.includes('src="')) {
+                const m = raw.match(/src="([^"]+)"/);
+                if (m && m[1]) raw = m[1];
+            }
+            const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = raw.match(regExp);
+            if (match && match[2] && match[2].length === 11) {
+                return `https://www.youtube.com/embed/${match[2]}`;
+            }
+            if (raw.startsWith('https://')) return raw;
+            return '';
+        };
+
+        window.compressImage = (file, callback) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = event => {
+                const img = new Image();
+                img.src = event.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 700;
+                    const MAX_HEIGHT = 700;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                    } else {
+                        if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    callback(canvas.toDataURL('image/jpeg', 0.7));
+                };
+            };
+        };
+
+        window.loadFromLocal = () => {
+            try {
+                const saved = window.safeStore.getItem('iu_recipes');
+                window.recipes = saved ? JSON.parse(saved) : getDemoData();
+            } catch (e) {
+                window.recipes = getDemoData();
+            }
+            window.renderApp();
+        };
+
+        window.saveData = async () => {
+            window.updateSyncStatus('กำลังบันทึก...', true);
+            const jsonString = JSON.stringify(window.recipes);
+            window.safeStore.setItem('iu_recipes', jsonString);
+
+            // Cloud Save if Firebase Auth is ready
+            if (window.db && window.auth?.currentUser) {
+                try {
+                    for (const r of window.recipes) {
+                        const docRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'recipes', r.id);
+                        await setDoc(docRef, r, { merge: true });
+                    }
+                    window.updateSyncStatus('คลาวด์ซิงค์', false, 'cloud');
+                } catch(err) {
+                    console.warn("Cloud save error:", err);
+                    window.updateSyncStatus('ความจำในเครื่อง', false, 'local');
+                }
+            } else {
+                setTimeout(() => {
+                    window.updateSyncStatus('ความจำในเครื่อง', false, 'local');
+                }, 400);
+            }
+            window.showToast('บันทึกสูตรเรียบร้อยแล้ว');
+        };
+
+        function getDemoData() {
+            return [
+                {
+                    id: 'sample-ชาไทยเย็น',
+                    name: 'ชาไทยเย็นสูตรเข้มข้น (Thai Iced Tea)',
+                    description: 'หอมกลิ่นชาไทยสกัดสด รสชาตินุ่มนวล หวานมันกำลังดี สูตรมาตรฐานร้าน',
+                    coverImage: 'https://images.unsplash.com/photo-1558857563-b371033873b8?auto=format&fit=crop&w=600&q=80',
+                    steps: [
+                        {
+                            stepName: 'สกัดน้ำชาไทย',
+                            details: 'ตักผงชาไทยใส่ก้านชง แรพแทมป์เบาๆ แล้วสกัดน้ำชาเข้มข้นให้ได้ปริมาณ 120 ml',
+                            youtubeUrl: '',
+                            images: [],
+                            ingredients: [
+                                { name: 'ผงชาไทยตรามือ', qty: 14, unit: 'g' },
+                                { name: 'น้ำร้อนสกัดชา', qty: 120, unit: 'ml' }
+                            ]
+                        },
+                        {
+                            stepName: 'ผสมนมและคนให้เข้ากัน',
+                            details: 'เทนมข้นหวานและนมข้นจืดลงในน้ำชาสกัดร้อน คนด้วยช้อนยาวให้ส่วนผสมละลายเข้ากันดี',
+                            youtubeUrl: '',
+                            images: [],
+                            ingredients: [
+                                { name: 'นมข้นหวาน', qty: 30, unit: 'ml' },
+                                { name: 'นมข้นจืด', qty: 30, unit: 'ml' },
+                                { name: 'น้ำเชื่อมสูตรพิเศษ', qty: 10, unit: 'ml' }
+                            ]
+                        },
+                        {
+                            stepName: 'ตักน้ำแข็งและราดนมสดหน้า',
+                            details: 'ตักน้ำแข็งหลอดเล็กเต็มแก้ว 16oz เทชาไทยลงไป แล้วราดด้วยนมสดเมจิ top ข้างบน 15ml',
+                            youtubeUrl: '',
+                            images: [],
+                            ingredients: [
+                                { name: 'น้ำแข็งหลอดเล็ก', qty: 1, unit: 'แก้ว' },
+                                { name: 'นมสดเมจิ (Top)', qty: 15, unit: 'ml' }
+                            ]
+                        }
+                    ]
+                }
+            ];
+        }
+
+        window.goHome = () => {
+            window.currentView = 'home';
+            window.renderApp();
+        };
+
+        window.toggleSearch = () => {
+            const container = document.getElementById('search-bar-container');
+            if (container) {
+                container.classList.toggle('hidden');
+                if (!container.classList.contains('hidden')) {
+                    document.getElementById('search-input')?.focus();
+                }
+            }
+        };
+
+        window.handleSearch = (val) => {
+            window.searchQuery = val.trim().toLowerCase();
+            window.renderHome(document.getElementById('main-content'));
+        };
+
+        window.clearSearch = () => {
+            window.searchQuery = '';
+            const input = document.getElementById('search-input');
+            if (input) input.value = '';
+            window.renderHome(document.getElementById('main-content'));
+        };
+
+        window.openModal = (modalId) => {
+            const el = document.getElementById(modalId);
+            if (el) el.classList.remove('hidden');
+        };
+
+        window.closeModal = (modalId) => {
+            const el = document.getElementById(modalId);
+            if (el) el.classList.add('hidden');
+        };
+
+        window.exportRecipesJSON = () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(window.recipes, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `IU_Recipes_Backup_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+            window.closeModal('backup-modal');
+            window.showToast('ส่งออกไฟล์สำรองสูตรสำเร็จ');
+        };
+
+        window.importRecipesJSON = (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (Array.isArray(imported)) {
+                        window.recipes = imported;
+                        window.saveData();
+                        window.renderApp();
+                        window.closeModal('backup-modal');
+                        window.showToast('นำเข้าสูตรเรียบร้อยแล้ว');
+                    } else {
+                        window.showToast('รูปแบบไฟล์ไม่ถูกต้อง', 'error');
+                    }
+                } catch (err) {
+                    window.showToast('อ่านไฟล์ JSON ไม่สำเร็จ', 'error');
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        window.renderApp = () => {
+            const main = document.getElementById('main-content');
+            const headerBtn = document.getElementById('header-action-btn');
+            if (!main || !headerBtn) return;
+
+            if (window.currentView === 'home') {
+                headerBtn.innerHTML = '<i class="fa-solid fa-plus text-sm"></i>';
+                headerBtn.onclick = () => window.openEditor();
+                window.renderHome(main);
+            } else if (window.currentView === 'editor') {
+                headerBtn.innerHTML = '<i class="fa-solid fa-check text-sm"></i>';
+                headerBtn.onclick = () => window.saveCurrentEdit();
+                window.renderEditor(main);
+            } else if (window.currentView === 'viewer') {
+                headerBtn.innerHTML = '<i class="fa-solid fa-arrow-left text-sm"></i>';
+                headerBtn.onclick = () => window.goHome();
+                window.renderViewer(main);
+            }
+        };
+
+        window.renderHome = (container) => {
+            let list = window.recipes;
+            if (window.searchQuery) {
+                list = list.filter(r => 
+                    r.name.toLowerCase().includes(window.searchQuery) ||
+                    (r.description && r.description.toLowerCase().includes(window.searchQuery)) ||
+                    (r.steps && r.steps.some(s => s.ingredients && s.ingredients.some(i => i.name.toLowerCase().includes(window.searchQuery))))
+                );
+            }
+
+            let html = `
+                <div class="space-y-4 pb-16">
+                    <div class="flex justify-between items-center px-1">
+                        <div>
+                            <h2 class="text-base font-bold text-slate-800">สูตรทั้งหมด (${list.length})</h2>
+                            <p class="text-[11px] text-slate-400">เลือกเมนูที่ต้องการเพื่อเข้าสู่หน้าคู่มือชง</p>
+                        </div>
+                        <button onclick="window.openModal('backup-modal')" class="text-xs bg-white text-slate-600 px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 transition flex items-center gap-1.5 shadow-sm font-medium">
+                            <i class="fa-solid fa-box-archive text-amber-500"></i> สำรองข้อมูล
+                        </button>
+                    </div>
+            `;
+
+            if (list.length === 0) {
+                html += `
+                    <div class="flex flex-col items-center justify-center py-16 px-4 text-center space-y-3 bg-white rounded-3xl border border-dashed border-slate-200">
+                        <div class="w-16 h-16 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-400 text-2xl shadow-inner">
+                            <i class="fa-solid fa-book-open"></i>
+                        </div>
+                        <h3 class="font-bold text-slate-700 text-sm">ยังไม่มีสูตรเครื่องดื่ม</h3>
+                        <p class="text-xs text-slate-400 max-w-xs">กดปุ่ม + มุมขวาบนเพื่อเริ่มสร้างสูตรเครื่องดื่มแรกของคุณได้ทันที</p>
+                        <button onclick="window.openEditor()" class="mt-2 bg-gradient-to-r from-orange-500 to-amber-500 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:opacity-90 transition">
+                            + สร้างสูตรแรก
+                        </button>
+                    </div>`;
+            } else {
+                html += `<div class="grid grid-cols-1 gap-3.5">`;
+                list.forEach(recipe => {
+                    const cover = recipe.coverImage || 'https://placehold.co/600x400/f8fafc/cbd5e1?text=IU+Recipe';
+                    const stepCount = recipe.steps ? recipe.steps.length : 0;
+                    
+                    html += `
+                        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-md transition-all">
+                            <div class="h-40 w-full relative cursor-pointer group" onclick="window.openViewer('${recipe.id}')">
+                                <img src="${cover}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" onerror="this.src='https://placehold.co/600x400/f8fafc/cbd5e1?text=No+Image'">
+                                <div class="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/20 to-transparent flex flex-col justify-end p-3.5">
+                                    <h3 class="text-white font-bold text-base leading-snug drop-shadow-sm">${window.escapeHTML(recipe.name)}</h3>
+                                    <p class="text-amber-300 text-xs mt-0.5 flex items-center gap-1 font-medium">
+                                        <i class="fa-solid fa-list-check"></i> ${stepCount} ขั้นตอนการทำ
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="p-2.5 flex justify-between items-center bg-white border-t border-slate-100">
+                                <button onclick="window.openViewer('${recipe.id}')" class="text-orange-600 font-bold text-xs flex items-center space-x-1.5 px-3 py-1.5 bg-orange-50 rounded-xl hover:bg-orange-100 transition">
+                                    <i class="fa-solid fa-play text-[10px]"></i> <span>เปิดดูวิธีชง</span>
+                                </button>
+                                <div class="space-x-1">
+                                    <button onclick="window.openEditor('${recipe.id}')" class="text-slate-400 hover:text-blue-500 p-1.5 transition" title="แก้ไขสูตร">
+                                        <i class="fa-solid fa-pen-to-square text-sm"></i>
+                                    </button>
+                                    <button onclick="window.askDeleteRecipe('${recipe.id}')" class="text-slate-400 hover:text-red-500 p-1.5 transition" title="ลบสูตร">
+                                        <i class="fa-solid fa-trash-can text-sm"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+            }
+
+            html += `</div>`;
+            container.innerHTML = html;
+        };
+
+        window.askDeleteRecipe = (id) => {
+            const r = window.recipes.find(item => item.id === id);
+            if (!r) return;
+            window.pendingDeleteId = id;
+            document.getElementById('delete-recipe-name').textContent = `เมนู: ${r.name}`;
+            document.getElementById('confirm-delete-btn').onclick = () => window.confirmDelete();
+            window.openModal('delete-modal');
+        };
+
+        window.confirmDelete = async () => {
+            if (!window.pendingDeleteId) return;
+            const id = window.pendingDeleteId;
+            const idx = window.recipes.findIndex(r => r.id === id);
+            if (idx > -1) {
+                window.recipes.splice(idx, 1);
+                
+                // Firestore delete
+                if (window.db && window.auth?.currentUser) {
+                    try {
+                        await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'recipes', id));
+                    } catch(e){}
+                }
+
+                window.safeStore.setItem('iu_recipes', JSON.stringify(window.recipes));
+                window.showToast('ลบสูตรเรียบร้อยแล้ว');
+            }
+            window.pendingDeleteId = null;
+            window.closeModal('delete-modal');
+            window.renderApp();
+        };
+
+        window.openEditor = (recipeId = null) => {
+            window.editingRecipeId = recipeId;
+            if (recipeId) {
+                const existing = window.recipes.find(r => r.id === recipeId);
+                window.currentFormData = JSON.parse(JSON.stringify(existing));
+            } else {
+                window.currentFormData = {
+                    id: window.generateId(),
+                    name: '',
+                    description: '',
+                    coverImage: '',
+                    steps: []
+                };
+            }
+            window.currentView = 'editor';
+            window.renderApp();
+        };
+
+        window.saveCurrentEdit = () => {
+            if (!window.currentFormData.name.trim()) {
+                window.showToast('กรุณาระบุชื่อเมนูเครื่องดื่ม', 'error');
+                return;
+            }
+            if (window.editingRecipeId) {
+                const index = window.recipes.findIndex(r => r.id === window.editingRecipeId);
+                if (index > -1) window.recipes[index] = window.currentFormData;
+            } else {
+                window.recipes.push(window.currentFormData);
+            }
+            window.saveData();
+            window.currentView = 'home';
+            window.renderApp();
+        };
+
+        window.renderEditor = (container) => {
+            const fd = window.currentFormData;
+            let html = `
+                <div class="space-y-4 pb-20">
+                    <div class="flex items-center justify-between">
+                        <button onclick="window.goHome()" class="text-slate-500 text-xs font-semibold hover:text-slate-800 transition flex items-center gap-1">
+                            <i class="fa-solid fa-chevron-left"></i> ย้อนกลับ
+                        </button>
+                        <span class="text-xs bg-orange-100 text-orange-700 font-bold px-2.5 py-1 rounded-lg">
+                            ${window.editingRecipeId ? 'แก้ไขสูตร' : 'สร้างสูตรใหม่'}
+                        </span>
+                    </div>
+
+                    <!-- General Info Card -->
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3.5">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">ชื่อเมนูเครื่องดื่ม <span class="text-red-500">*</span></label>
+                            <input type="text" value="${window.escapeHTML(fd.name)}" oninput="window.currentFormData.name=this.value" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 outline-none focus:border-orange-500 focus:bg-white transition" placeholder="เช่น ชาไทยเย็นสูตรเข้มข้น">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">คำอธิบายรายละเอียด</label>
+                            <textarea oninput="window.currentFormData.description=this.value" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 outline-none focus:border-orange-500 focus:bg-white transition" rows="2" placeholder="จุดเด่น รสชาติ เทคนิค หรือคำแนะนำ...">${window.escapeHTML(fd.description)}</textarea>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-1">รูปภาพหน้าปก</label>
+                            <div class="flex items-center space-x-3">
+                                <div class="w-20 h-20 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 flex-shrink-0 relative">
+                                    ${fd.coverImage ? `<img src="${fd.coverImage}" class="w-full h-full object-cover">` : `<div class="w-full h-full flex items-center justify-center text-slate-300"><i class="fa-regular fa-image text-2xl"></i></div>`}
+                                </div>
+                                <input type="file" id="cover-upload" accept="image/*" class="hidden" onchange="window.handleCoverUpload(event)">
+                                <button type="button" onclick="document.getElementById('cover-upload').click()" class="px-3 py-2 bg-slate-100 text-slate-700 text-xs rounded-xl hover:bg-slate-200 transition font-bold flex items-center gap-1.5">
+                                    <i class="fa-solid fa-camera"></i> เลือกรูปภาพ
+                                </button>
+                                ${fd.coverImage ? `<button type="button" onclick="window.currentFormData.coverImage=''; window.renderEditor(document.getElementById('main-content'));" class="text-red-500 text-xs p-2 hover:underline">ลบรูป</button>` : ''}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Steps Section Header -->
+                    <div class="flex justify-between items-center pt-2">
+                        <h3 class="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                            <i class="fa-solid fa-list-check text-orange-500"></i> ขั้นตอนการทำ (${fd.steps.length})
+                        </h3>
+                        <button type="button" onclick="window.addStep()" class="bg-gradient-to-r from-orange-500 to-amber-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90 transition shadow-sm flex items-center gap-1">
+                            <i class="fa-solid fa-plus text-[10px]"></i> เพิ่มขั้นตอน
+                        </button>
+                    </div>
+            `;
+
+            if (fd.steps.length === 0) {
+                html += `
+                    <div class="bg-white p-6 rounded-2xl border border-dashed border-slate-200 text-center text-slate-400 text-xs">
+                        ยังไม่มีขั้นตอนการทำ กดปุ่ม "เพิ่มขั้นตอน" ด้านบนเพื่อเริ่มกำหนดขั้นตอนชง
+                    </div>`;
+            } else {
+                fd.steps.forEach((step, sIdx) => {
+                    html += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3 relative">
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-2">
+                            <span class="bg-orange-500 text-white w-6 h-6 rounded-lg flex items-center justify-center font-bold text-xs shadow-sm">
+                                ${sIdx + 1}
+                            </span>
+                            <button type="button" onclick="window.removeStep(${sIdx})" class="text-slate-300 hover:text-red-500 p-1 transition" title="ลบขั้นตอนนี้">
+                                <i class="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                        </div>
+                        
+                        <div class="space-y-2.5">
+                            <div>
+                                <label class="block text-[11px] font-bold text-slate-600 mb-1">ชื่อขั้นตอน</label>
+                                <input type="text" value="${window.escapeHTML(step.stepName)}" oninput="window.currentFormData.steps[${sIdx}].stepName=this.value" placeholder="เช่น สกัดน้ำชาไทย หรือ ผสมนม" class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:border-orange-400">
+                            </div>
+
+                            <div>
+                                <label class="block text-[11px] font-bold text-slate-600 mb-1">รายละเอียดวิธีทำ</label>
+                                <textarea oninput="window.currentFormData.steps[${sIdx}].details=this.value" placeholder="ระบุวิธีปฏิบัติงานอย่างละเอียด..." class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-orange-400" rows="2">${window.escapeHTML(step.details || '')}</textarea>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-[11px] font-bold text-slate-600 mb-1">
+                                    <i class="fa-brands fa-youtube text-red-500 mr-1"></i> ลิงก์วิดีโอ YouTube (ถ้ามี)
+                                </label>
+                                <input type="text" value="${window.escapeHTML(step.youtubeUrl || '')}" 
+                                       oninput="window.currentFormData.steps[${sIdx}].youtubeUrl = window.parseYouTubeUrl(this.value)" 
+                                       placeholder="วางลิงก์ https://www.youtube.com/watch?v=... หรือ https://youtu.be/..." 
+                                       class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-red-400">
+                            </div>
+
+                            <div>
+                                <label class="block text-[11px] font-bold text-slate-600 mb-1">รูปภาพประกอบขั้นตอน</label>
+                                <div class="flex flex-wrap gap-2">
+                                    ${(step.images || []).map((img, iIdx) => `
+                                        <div class="relative w-14 h-14 rounded-xl overflow-hidden border border-slate-200">
+                                            <img src="${img}" class="w-full h-full object-cover">
+                                            <button type="button" onclick="window.removeStepImage(${sIdx}, ${iIdx})" class="absolute top-0 right-0 bg-red-500/90 text-white w-4 h-4 flex items-center justify-center rounded-bl text-[9px]">
+                                                <i class="fa-solid fa-xmark"></i>
+                                            </button>
+                                        </div>
+                                    `).join('')}
+                                    <input type="file" id="step-img-${sIdx}" accept="image/*" class="hidden" onchange="window.handleStepImageUpload(event, ${sIdx})">
+                                    <button type="button" onclick="document.getElementById('step-img-${sIdx}').click()" class="w-14 h-14 rounded-xl border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400 hover:bg-slate-50 hover:text-orange-500 transition">
+                                        <i class="fa-solid fa-plus text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Step Ingredients -->
+                            <div class="mt-3 pt-3 border-t border-slate-100">
+                                <div class="flex justify-between items-center mb-2">
+                                    <span class="text-[11px] font-bold text-teal-700">
+                                        <i class="fa-solid fa-flask mr-1"></i> ส่วนผสมในขั้นตอนนี้
+                                    </span>
+                                    <button type="button" onclick="window.addIngredient(${sIdx})" class="text-[11px] text-teal-600 font-bold hover:underline">
+                                        + เพิ่มส่วนผสม
+                                    </button>
+                                </div>
+                                <div class="space-y-1.5">
+                                    ${(step.ingredients || []).map((ing, ingIdx) => `
+                                        <div class="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                                            <input type="text" value="${window.escapeHTML(ing.name)}" oninput="window.currentFormData.steps[${sIdx}].ingredients[${ingIdx}].name=this.value" placeholder="วัตถุดิบ" class="flex-1 min-w-0 p-1 text-xs bg-white border border-slate-200 rounded-lg outline-none">
+                                            <input type="number" step="0.1" value="${ing.qty}" oninput="window.currentFormData.steps[${sIdx}].ingredients[${ingIdx}].qty=this.value" placeholder="ปริมาณ" class="w-16 p-1 text-xs bg-white border border-slate-200 rounded-lg outline-none text-right font-bold">
+                                            <input type="text" value="${window.escapeHTML(ing.unit)}" oninput="window.currentFormData.steps[${sIdx}].ingredients[${ingIdx}].unit=this.value" placeholder="หน่วย" class="w-12 p-1 text-xs bg-white border border-slate-200 rounded-lg outline-none text-center">
+                                            <button type="button" onclick="window.removeIngredient(${sIdx}, ${ingIdx})" class="text-red-400 hover:text-red-600 p-1">
+                                                <i class="fa-solid fa-trash-can text-xs"></i>
+                                            </button>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    `;
+                });
+            }
+
+            html += `</div>`;
+            container.innerHTML = html;
+        };
+
+        window.addStep = () => {
+            window.currentFormData.steps.push({ stepName: '', details: '', youtubeUrl: '', images: [], ingredients: [] });
+            window.renderEditor(document.getElementById('main-content'));
+        };
+
+        window.removeStep = (sIdx) => {
+            window.currentFormData.steps.splice(sIdx, 1);
+            window.renderEditor(document.getElementById('main-content'));
+        };
+
+        window.addIngredient = (sIdx) => {
+            if (!window.currentFormData.steps[sIdx].ingredients) window.currentFormData.steps[sIdx].ingredients = [];
+            window.currentFormData.steps[sIdx].ingredients.push({ name: '', qty: '', unit: 'ml' });
+            window.renderEditor(document.getElementById('main-content'));
+        };
+
+        window.removeIngredient = (sIdx, ingIdx) => {
+            window.currentFormData.steps[sIdx].ingredients.splice(ingIdx, 1);
+            window.renderEditor(document.getElementById('main-content'));
+        };
+
+        window.handleCoverUpload = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            window.compressImage(file, (base64) => {
+                window.currentFormData.coverImage = base64;
+                window.renderEditor(document.getElementById('main-content'));
+            });
+        };
+
+        window.handleStepImageUpload = (e, sIdx) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            window.compressImage(file, (base64) => {
+                if (!window.currentFormData.steps[sIdx].images) window.currentFormData.steps[sIdx].images = [];
+                window.currentFormData.steps[sIdx].images.push(base64);
+                window.renderEditor(document.getElementById('main-content'));
+            });
+        };
+
+        window.removeStepImage = (sIdx, iIdx) => {
+            window.currentFormData.steps[sIdx].images.splice(iIdx, 1);
+            window.renderEditor(document.getElementById('main-content'));
+        };
+
+        window.openViewer = (recipeId) => {
+            const recipe = window.recipes.find(r => r.id === recipeId);
+            if (!recipe) return;
+            window.currentFormData = recipe;
+            window.servingMultiplier = 1;
+            window.currentView = 'viewer';
+            window.renderApp();
+        };
+
+        window.setMultiplier = (val) => {
+            window.servingMultiplier = val;
+            window.renderViewer(document.getElementById('main-content'));
+        };
+
+        window.renderViewer = (container) => {
+            const r = window.currentFormData;
+            const cover = r.coverImage || 'https://placehold.co/800x400/f1f5f9/94a3b8?text=IU+Recipe';
+            const mult = window.servingMultiplier;
+
+            let html = `
+                <div class="pb-20 -m-4 space-y-4">
+                    <!-- Recipe Header Cover Banner -->
+                    <div class="relative h-64 w-full bg-slate-900">
+                        <img src="${cover}" class="w-full h-full object-cover opacity-80" onerror="this.src='https://placehold.co/800x400/f1f5f9/94a3b8?text=No+Image'">
+                        <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-900/40 to-transparent flex flex-col justify-end p-5 text-white">
+                            <span class="text-[10px] font-bold bg-amber-500 text-slate-950 px-2 py-0.5 rounded-md w-max mb-1.5 uppercase tracking-wider">Work Instruction</span>
+                            <h1 class="text-2xl font-black leading-tight drop-shadow-md">${window.escapeHTML(r.name)}</h1>
+                            ${r.description ? `<p class="text-xs text-slate-200 mt-1 font-normal opacity-90 line-clamp-2">${window.escapeHTML(r.description)}</p>` : ''}
+                        </div>
+                    </div>
+
+                    <!-- Interactive Servings Scaler Widget -->
+                    <div class="px-4">
+                        <div class="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between">
+                            <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                <i class="fa-solid fa-calculator text-amber-500"></i> คำนวณตามจำนวนแก้ว:
+                            </span>
+                            <div class="flex items-center space-x-1">
+                                ${[1, 2, 3, 5, 10].map(m => `
+                                    <button onclick="window.setMultiplier(${m})" class="w-8 h-8 rounded-xl text-xs font-bold transition ${mult === m ? 'bg-orange-500 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">
+                                        ${m}x
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Steps Checklist Container -->
+                    <div class="px-4 space-y-4">
+            `;
+
+            if (!r.steps || r.steps.length === 0) {
+                html += `<div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 text-center text-slate-400 text-xs">ไม่มีข้อมูลขั้นตอนการทำสำหรับเมนูนี้</div>`;
+            } else {
+                r.steps.forEach((step, sIdx) => {
+                    html += `
+                        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                            <!-- Step Header -->
+                            <div class="bg-slate-800 p-3.5 text-white flex items-center space-x-3">
+                                <div class="w-7 h-7 bg-orange-500 text-white rounded-lg flex items-center justify-center font-bold text-xs shadow-inner flex-shrink-0">
+                                    ${sIdx + 1}
+                                </div>
+                                <h2 class="text-sm font-bold flex-1 leading-snug">${window.escapeHTML(step.stepName)}</h2>
+                            </div>
+                            
+                            <div class="p-4 space-y-3">
+                                <!-- Details -->
+                                ${step.details ? `
+                                    <p class="text-slate-700 text-xs bg-slate-50 p-3 rounded-xl border-l-4 border-orange-400 whitespace-pre-line leading-relaxed">
+                                        ${window.escapeHTML(step.details)}
+                                    </p>
+                                ` : ''}
+
+                                <!-- Ingredient Table scaled -->
+                                ${(step.ingredients && step.ingredients.length > 0) ? `
+                                    <div class="bg-teal-50/70 p-3 rounded-xl border border-teal-100 space-y-1.5">
+                                        <h3 class="text-[11px] font-bold text-teal-800 uppercase tracking-wider flex items-center gap-1">
+                                            <i class="fa-solid fa-vial text-teal-600"></i> ส่วนผสมขั้นตอนที่ ${sIdx + 1} ${mult > 1 ? `(คูณ ${mult} แก้ว)` : ''}
+                                        </h3>
+                                        <div class="divide-y divide-teal-100">
+                                            ${step.ingredients.map(ing => {
+                                                const rawQty = parseFloat(ing.qty);
+                                                const scaledQty = !isNaN(rawQty) ? (rawQty * mult) : ing.qty;
+                                                return `
+                                                    <div class="flex justify-between items-center py-1.5 text-xs">
+                                                        <span class="text-slate-700 font-medium">${window.escapeHTML(ing.name)}</span>
+                                                        <span class="font-bold text-teal-800 bg-teal-100/90 px-2 py-0.5 rounded-md text-xs">
+                                                            ${scaledQty} <span class="text-[10px] font-normal">${window.escapeHTML(ing.unit)}</span>
+                                                        </span>
+                                                    </div>
+                                                `;
+                                            }).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
+
+                                <!-- Images Gallery -->
+                                ${(step.images && step.images.length > 0) ? `
+                                    <div class="flex gap-2 overflow-x-auto hide-scrollbar py-1">
+                                        ${step.images.map(img => `
+                                            <img src="${img}" class="w-24 h-24 object-cover rounded-xl shadow-sm border border-slate-200 flex-shrink-0">
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+                                
+                                <!-- YouTube Video Player -->
+                                ${step.youtubeUrl ? `
+                                    <div class="rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-black">
+                                        <div class="relative w-full" style="padding-top: 56.25%;">
+                                            <iframe class="absolute top-0 left-0 w-full h-full" src="${step.youtubeUrl}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                        </div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+
+            html += `
+                    </div>
+                </div>
+            `;
+            container.innerHTML = html;
+        };
+
+        // Initialize App on DOM Load
+        document.addEventListener('DOMContentLoaded', () => {
+            initFirebase();
+        });
+    </script>
+</body>
+</html>
