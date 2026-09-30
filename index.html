@@ -167,14 +167,14 @@
                         <i class="fa-solid fa-xmark"></i>
                     </button>
                 </div>
-                <p class="text-xs text-slate-500 leading-relaxed">คุณสามารถดาวน์โหลดไฟล์สำรองเก็บไว้ หรือนำไฟล์จากเครื่องอื่นมานำเข้าได้ที่นี่</p>
+                <p class="text-xs text-slate-500 leading-relaxed">คุณสามารถดาวน์โหลดไฟล์สำรองเก็บไว้ หรือนำไฟล์จากเครื่องอื่นมานำเข้าได้ที่นี่ (ใช้งานได้ทั้ง Android, iOS และ Windows)</p>
                 <div class="space-y-2">
                     <button type="button" onclick="exportRecipesJSON()" class="w-full py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Backup .TXT)
+                        <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Export JSON)
                     </button>
                     <label class="w-full py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
-                        <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (.TXT / .JSON)
-                        <input type="file" accept=".txt,text/plain,.json,application/json" class="hidden" onchange="importRecipesJSON(event)">
+                        <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (Import JSON)
+                        <input type="file" accept=".json,application/json,.txt,text/plain" class="hidden" onchange="importRecipesJSON(event)">
                     </label>
                 </div>
             </div>
@@ -607,9 +607,20 @@
          * ------------------------------------------------------------
          * Backup format: JSON (UTF-8)
          * - Works with Android, iPhone/iPad (iOS), Windows and macOS browsers.
-         * - Uses Blob + object URL instead of a data: URL, which is more
-         *   reliable for larger files and mobile browsers.
-         * - Includes recipes + store settings.
+         * - Priority order when saving a backup file:
+         *     1) File System Access API (showSaveFilePicker) -> native
+         *        "Save As" dialog. Only available on Chromium desktop
+         *        browsers (Windows/Mac/Linux/ChromeOS).
+         *     2) Web Share API with files (navigator.share) -> the ONLY
+         *        reliable way to let a user actually save a file on
+         *        iOS Safari (opens native Share Sheet -> "Save to Files"),
+         *        also works on Android Chrome.
+         *     3) Classic <a download> click -> works on Android/desktop
+         *        browsers that don't support the two methods above
+         *        (e.g. Firefox, older Chrome/Edge).
+         *     4) Open the file in a new tab as a last resort so the user
+         *        can still manually save/share it.
+         * - Includes recipes + store settings in one JSON payload.
          * - Import remains backward compatible with the old format where
          *   the file contains only an array of recipes.
          */
@@ -630,44 +641,18 @@
             };
         };
 
-        /*
-         * Save a backup file.
-         * 1) On browsers supporting the File System Access API (mainly
-         *    Chromium on Windows/Android), show the native "Save As" dialog.
-         * 2) On iOS/Safari and unsupported browsers, fall back to a normal
-         *    browser download so the backup is still usable.
-         */
-        /*
-         * Cross-platform backup saving
-         * ------------------------------------------------------------
-         * Priority:
-         * 1) Desktop browsers with File System Access API:
-         *    native "Save As" dialog.
-         * 2) Mobile browsers with Web Share API:
-         *    open the native Share/Save sheet so the user can choose
-         *    Files, Downloads, Drive, etc. instead of silently saving.
-         * 3) Normal browser download as final fallback.
-         *
-         * Important:
-         * Mobile browsers do not expose a universal "Save As" folder
-         * picker to web pages. The Web Share API is the closest native
-         * cross-platform solution and lets the user choose the destination
-         * through the phone's own Files/Share UI.
-         */
         window.saveBackupFile = async (filename, content, mimeType = 'application/json') => {
             const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
 
-            // ---------------------------------------------------------
-            // 1) Desktop / supported Chromium: native Save As dialog
-            // ---------------------------------------------------------
+            // 1) Native "Save As" dialog (Windows/Mac/Linux/ChromeOS Chromium browsers).
             if (typeof window.showSaveFilePicker === 'function') {
                 try {
                     const handle = await window.showSaveFilePicker({
                         suggestedName: filename,
                         types: [{
-                            description: 'IU Recipes Backup Text File',
+                            description: 'IU Recipes Backup',
                             accept: {
-                                'text/plain': ['.txt']
+                                'application/json': ['.json']
                             }
                         }]
                     });
@@ -675,49 +660,38 @@
                     const writable = await handle.createWritable();
                     await writable.write(blob);
                     await writable.close();
-
                     return { saved: true, method: 'picker' };
                 } catch (err) {
+                    // User pressed Cancel: do not create an unwanted download.
                     if (err && err.name === 'AbortError') {
                         return { saved: false, cancelled: true };
                     }
-                    console.warn('Save As dialog failed:', err);
+                    console.warn('Save As dialog failed; trying next method.', err);
                 }
             }
 
-            // ---------------------------------------------------------
-            // 2) Mobile: native Share / Save sheet
-            //    This is especially useful on iPhone/iPad.
-            // ---------------------------------------------------------
+            // 2) Web Share API with files: the reliable way to save on
+            // iOS Safari (Share Sheet -> "Save to Files") and Android Chrome.
             try {
-                const file = new File([blob], filename, {
-                    type: mimeType,
-                    lastModified: Date.now()
-                });
-
-                if (
-                    typeof navigator.share === 'function' &&
-                    (!navigator.canShare || navigator.canShare({ files: [file] }))
-                ) {
+                const shareFile = new File([blob], filename, { type: blob.type });
+                if (typeof navigator.canShare === 'function' &&
+                    navigator.canShare({ files: [shareFile] }) &&
+                    typeof navigator.share === 'function') {
                     await navigator.share({
-                        title: 'สำรองข้อมูลสูตร',
-                        text: 'ไฟล์สำรองสูตร IU Recipes',
-                        files: [file]
+                        files: [shareFile],
+                        title: filename,
+                        text: 'ไฟล์สำรองข้อมูลสูตร IU Recipes'
                     });
-
                     return { saved: true, method: 'share' };
                 }
             } catch (err) {
-                // User closed the share sheet.
                 if (err && err.name === 'AbortError') {
                     return { saved: false, cancelled: true };
                 }
-                console.warn('Mobile Share/Save failed:', err);
+                console.warn('Web Share failed; trying next method.', err);
             }
 
-            // ---------------------------------------------------------
-            // 3) Final fallback: browser download
-            // ---------------------------------------------------------
+            // 3) Cross-browser download fallback (Android/desktop, Firefox, etc.)
             try {
                 const url = URL.createObjectURL(blob);
                 const anchor = document.createElement('a');
@@ -737,7 +711,18 @@
 
                 return { saved: true, method: 'download' };
             } catch (err) {
-                console.error('Backup download error:', err);
+                console.warn('Download fallback failed; trying last resort.', err);
+            }
+
+            // 4) Last resort: open the file in a new tab so the user can
+            // still manually save or share it from the browser itself.
+            try {
+                const url = URL.createObjectURL(blob);
+                window.open(url, '_blank');
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+                return { saved: true, method: 'newtab' };
+            } catch (err) {
+                console.error('Backup save error:', err);
                 return { saved: false, error: err };
             }
         };
@@ -753,12 +738,12 @@
                     '-' + String(date.getMonth() + 1).padStart(2, '0') +
                     '-' + String(date.getDate()).padStart(2, '0');
 
-                const filename = `IU_Recipes_Backup_${dateText}.txt`;
+                const filename = `IU_Recipes_Backup_${dateText}.json`;
 
                 const result = await window.saveBackupFile(
                     filename,
                     json,
-                    'text/plain'
+                    'application/json'
                 );
 
                 if (result.cancelled) {
@@ -773,15 +758,17 @@
                 window.closeModal('backup-modal');
 
                 if (result.method === 'picker') {
-                    window.showToast('เลือกตำแหน่งบันทึกไฟล์สำเร็จ');
+                    window.showToast(`เลือกตำแหน่งบันทึกไฟล์สำเร็จ (${window.recipes.length} สูตร)`);
                 } else if (result.method === 'share') {
-                    window.showToast('เปิดหน้าต่างเลือกตำแหน่งบันทึกแล้ว');
+                    window.showToast(`ส่งไฟล์สำรองไปบันทึก/แชร์สำเร็จ (${window.recipes.length} สูตร)`);
+                } else if (result.method === 'newtab') {
+                    window.showToast('เปิดไฟล์สำรองในแท็บใหม่แล้ว กดค้างที่ไฟล์เพื่อบันทึก', 'info');
                 } else {
-                    window.showToast('สร้างไฟล์สำรองแล้ว กรุณาตรวจสอบ Downloads');
+                    window.showToast(`สร้างไฟล์สำรองสำเร็จ ดูได้ใน Downloads (${window.recipes.length} สูตร)`);
                 }
             } catch (err) {
                 console.error('Export error:', err);
-                window.showToast('ส่งออกไฟล์สำรอง .txt ไม่สำเร็จ', 'error');
+                window.showToast('ส่งออกไฟล์สำรองไม่สำเร็จ', 'error');
             }
         };
 
@@ -790,189 +777,77 @@
                 return null;
             }
 
-            // Preserve the complete recipe object instead of dropping any
-            // future/custom fields that may exist in a backup file.
-            const normalized = JSON.parse(JSON.stringify(recipe));
-
-            if (!normalized.id || typeof normalized.id !== 'string') {
-                normalized.id =
-                    `imported-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 7)}`;
-            }
-
-            if (typeof normalized.name !== 'string') normalized.name = '';
-            if (typeof normalized.description !== 'string') normalized.description = '';
-            if (typeof normalized.coverImage !== 'string') normalized.coverImage = '';
-            if (!Array.isArray(normalized.steps)) normalized.steps = [];
-
-            normalized.steps = normalized.steps.map(step => {
-                const item = (step && typeof step === 'object' && !Array.isArray(step))
-                    ? JSON.parse(JSON.stringify(step))
-                    : {};
-
-                if (typeof item.stepName !== 'string') item.stepName = '';
-                if (typeof item.details !== 'string') item.details = '';
-                if (typeof item.youtubeUrl !== 'string') item.youtubeUrl = '';
-                if (!Array.isArray(item.images)) item.images = [];
-                if (!Array.isArray(item.ingredients)) item.ingredients = [];
-
-                item.images = item.images.filter(img => typeof img === 'string');
-
-                item.ingredients = item.ingredients.map(ing => {
-                    const ingredient =
-                        (ing && typeof ing === 'object' && !Array.isArray(ing))
-                            ? JSON.parse(JSON.stringify(ing))
-                            : {};
-
-                    if (typeof ingredient.name !== 'string') ingredient.name = '';
-                    if (ingredient.qty === undefined || ingredient.qty === null) ingredient.qty = '';
-                    if (typeof ingredient.unit !== 'string') ingredient.unit = '';
-                    if (typeof ingredient.image !== 'string') ingredient.image = '';
-
-                    return ingredient;
-                });
-
-                return item;
-            });
-
-            return normalized;
-        };
-
-        /*
-         * Robust Backup Parser
-         * ------------------------------------------------------------
-         * Accepts:
-         * - New IU backup TXT/JSON envelope
-         * - Old backup JSON array
-         * - JSON object containing { recipes: [...] }
-         * - A JSON string that itself contains JSON
-         * - UTF-8 / UTF-16 files with BOM
-         * - TXT files copied from editors with ```json code fences
-         */
-        window.decodeBackupFile = async (file) => {
-            const buffer = await file.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-
-            let encoding = 'utf-8';
-
-            if (bytes.length >= 2 &&
-                bytes[0] === 0xFF && bytes[1] === 0xFE) {
-                encoding = 'utf-16le';
-            } else if (bytes.length >= 2 &&
-                       bytes[0] === 0xFE && bytes[1] === 0xFF) {
-                encoding = 'utf-16be';
-            }
-
-            const decoder = new TextDecoder(encoding, { fatal: false });
-            return decoder.decode(buffer).replace(/^\uFEFF/, '');
-        };
-
-        window.cleanBackupText = (text) => {
-            if (typeof text !== 'string') return '';
-
-            let clean = text
-                .replace(/^\uFEFF/, '')
-                .replace(/\u0000/g, '')
-                .trim();
-
-            // Remove Markdown code fences if a user saved the JSON from
-            // an editor/chat as a TXT file.
-            clean = clean
-                .replace(/^```(?:json|JSON|txt|TXT)?\s*/i, '')
-                .replace(/\s*```$/i, '')
-                .trim();
-
-            return clean;
+            return {
+                id: typeof recipe.id === 'string' && recipe.id.trim()
+                    ? recipe.id
+                    : `imported-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+                name: typeof recipe.name === 'string' ? recipe.name : '',
+                description: typeof recipe.description === 'string' ? recipe.description : '',
+                coverImage: typeof recipe.coverImage === 'string' ? recipe.coverImage : '',
+                steps: Array.isArray(recipe.steps) ? recipe.steps.map(step => ({
+                    stepName: typeof step?.stepName === 'string' ? step.stepName : '',
+                    details: typeof step?.details === 'string' ? step.details : '',
+                    youtubeUrl: typeof step?.youtubeUrl === 'string' ? step.youtubeUrl : '',
+                    images: Array.isArray(step?.images)
+                        ? step.images.filter(img => typeof img === 'string')
+                        : [],
+                    ingredients: Array.isArray(step?.ingredients)
+                        ? step.ingredients.map(ing => ({
+                            name: typeof ing?.name === 'string' ? ing.name : '',
+                            qty: ing?.qty ?? '',
+                            unit: typeof ing?.unit === 'string' ? ing.unit : '',
+                            image: typeof ing?.image === 'string' ? ing.image : ''
+                        }))
+                        : []
+                })) : []
+            };
         };
 
         window.parseBackupData = (rawText) => {
-            const cleanText = window.cleanBackupText(rawText);
-
-            if (!cleanText) {
-                throw new Error('ไฟล์สำรองว่างเปล่า');
+            if (typeof rawText !== 'string' || !rawText.trim()) {
+                throw new Error('ไฟล์ว่าง');
             }
 
-            let parsed;
-
-            try {
-                parsed = JSON.parse(cleanText);
-            } catch (firstError) {
-                // Some mobile/editor applications may wrap the complete
-                // JSON document as a JSON string. Try one extra decode.
-                try {
-                    const unwrapped = JSON.parse(JSON.stringify(cleanText));
-                    parsed = JSON.parse(unwrapped);
-                } catch (secondError) {
-                    console.error('Backup JSON parse error:', firstError);
-                    throw new Error(
-                        'ไฟล์ไม่ใช่ข้อมูลสำรอง IU Recipes ที่ถูกต้อง หรือไฟล์เสียหาย'
-                    );
-                }
-            }
-
-            // If the first JSON value is itself a JSON string, decode again.
-            if (typeof parsed === 'string') {
-                const nestedText = window.cleanBackupText(parsed);
-                try {
-                    parsed = JSON.parse(nestedText);
-                } catch (err) {
-                    throw new Error('โครงสร้างข้อมูลสำรองไม่ถูกต้อง');
-                }
-            }
+            // Remove UTF-8 BOM if created by another editor/app.
+            const cleanText = rawText.replace(/^\uFEFF/, '').trim();
+            const parsed = JSON.parse(cleanText);
 
             let importedRecipes = null;
             let importedSettings = null;
 
-            // ---------------------------------------------------------
-            // New backup envelope:
-            // {
-            //   format: "iu-recipes-backup",
-            //   version: 1,
-            //   recipes: [...]
-            // }
-            // ---------------------------------------------------------
+            // New backup format.
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                if (Array.isArray(parsed.recipes)) {
+                if (parsed.format === BACKUP_FORMAT || Array.isArray(parsed.recipes)) {
                     importedRecipes = parsed.recipes;
-                    importedSettings =
-                        parsed.storeSettings &&
-                        typeof parsed.storeSettings === 'object'
-                            ? parsed.storeSettings
-                            : null;
+                    importedSettings = parsed.storeSettings || null;
                 }
             }
 
-            // ---------------------------------------------------------
-            // Old format:
-            // [ recipe1, recipe2, ... ]
-            // ---------------------------------------------------------
+            // Backward compatibility with the original export format:
+            // the entire JSON file was an array of recipes.
             if (Array.isArray(parsed)) {
                 importedRecipes = parsed;
             }
 
             if (!Array.isArray(importedRecipes)) {
-                throw new Error(
-                    'ไม่พบรายการสูตรในไฟล์สำรอง (รองรับ .TXT และ .JSON)'
-                );
+                throw new Error('ไม่พบข้อมูลสูตรในไฟล์สำรอง');
             }
 
-            const recipes = importedRecipes.map((recipe, index) => {
-                const normalized = window.normalizeImportedRecipe(recipe, index);
+            const recipes = importedRecipes
+                .map((recipe, index) => window.normalizeImportedRecipe(recipe, index))
+                .filter(Boolean);
 
-                if (!normalized) {
-                    throw new Error(`ข้อมูลสูตรรายการที่ ${index + 1} ไม่ถูกต้อง`);
-                }
-
-                return normalized;
-            });
+            if (recipes.length !== importedRecipes.length) {
+                throw new Error('ข้อมูลสูตรบางรายการไม่ถูกต้อง');
+            }
 
             return {
                 recipes,
-                storeSettings: importedSettings,
-                sourceCount: importedRecipes.length
+                storeSettings: importedSettings
             };
         };
 
-        window.importRecipesJSON = async (event) => {
+        window.importRecipesJSON = (event) => {
             const input = event?.target;
             const file = input?.files?.[0];
 
@@ -982,79 +857,62 @@
                 if (input) input.value = '';
             };
 
-            try {
-                window.showToast('กำลังอ่านไฟล์สำรอง...', 'info');
+            const reader = new FileReader();
 
-                const rawText = await window.decodeBackupFile(file);
-                const result = window.parseBackupData(rawText);
+            reader.onerror = () => {
+                resetInput();
+                window.showToast('ไม่สามารถอ่านไฟล์สำรองได้', 'error');
+            };
 
-                if (!result.recipes.length) {
-                    throw new Error('ไฟล์สำรองไม่มีสูตรสำหรับนำเข้า');
-                }
+            reader.onload = async (e) => {
+                try {
+                    const result = window.parseBackupData(e.target.result);
 
-                // Keep the current data untouched until the backup has
-                // successfully passed all validation.
-                const importedRecipes = result.recipes;
+                    // Replace the current data only after the complete file
+                    // has been parsed and validated.
+                    window.recipes = result.recipes;
 
-                // Restore store settings if present.
-                if (result.storeSettings && typeof result.storeSettings === 'object') {
-                    if (typeof result.storeSettings.storeName === 'string' &&
-                        result.storeSettings.storeName.trim()) {
-                        window.storeName = result.storeSettings.storeName.trim();
-                    }
+                    // Restore store settings when included in the backup.
+                    if (result.storeSettings && typeof result.storeSettings === 'object') {
+                        if (typeof result.storeSettings.storeName === 'string' &&
+                            result.storeSettings.storeName.trim()) {
+                            window.storeName = result.storeSettings.storeName.trim();
+                        }
 
-                    if (typeof result.storeSettings.storeLogo === 'string') {
-                        window.storeLogo = result.storeSettings.storeLogo;
-                    }
+                        if (typeof result.storeSettings.storeLogo === 'string') {
+                            window.storeLogo = result.storeSettings.storeLogo;
+                        }
 
-                    window.safeStore.setItem(
-                        'iu_store_settings',
-                        JSON.stringify({
+                        window.safeStore.setItem('iu_store_settings', JSON.stringify({
                             storeName: window.storeName,
                             storeLogo: window.storeLogo
-                        })
-                    );
+                        }));
+                        window.updateHeaderUI();
+                    }
 
-                    window.updateHeaderUI();
-                }
+                    // Save locally first so imported data survives reload even
+                    // if Google Sheets/Firebase is unavailable.
+                    window.safeStore.setItem('iu_recipes', JSON.stringify(window.recipes));
 
-                // Save the imported data locally first.
-                window.recipes = importedRecipes;
-                window.safeStore.setItem(
-                    'iu_recipes',
-                    JSON.stringify(window.recipes)
-                );
-
-                // Sync to the existing cloud/Google Sheets layer.
-                try {
+                    // Then use the existing cloud / Google Sheets sync.
                     await window.saveData();
-                } catch (syncError) {
-                    console.warn('Import cloud sync warning:', syncError);
-                    // Local import is already complete. Do not report the
-                    // import itself as failed because cloud sync failed.
+
+                    window.renderApp();
+                    window.closeModal('backup-modal');
+
+                    window.showToast(`นำเข้าข้อมูลสำเร็จ (${window.recipes.length} สูตร)`);
+                } catch (err) {
+                    console.error('Import error:', err);
+                    window.showToast(
+                        err?.message || 'ไม่สามารถนำเข้าไฟล์สำรองได้',
+                        'error'
+                    );
+                } finally {
+                    resetInput();
                 }
+            };
 
-                window.renderApp();
-                window.closeModal('backup-modal');
-
-                const extension =
-                    (file.name || '').toLowerCase().endsWith('.json')
-                        ? '.JSON'
-                        : '.TXT';
-
-                window.showToast(
-                    `นำเข้าข้อมูลสำเร็จ ${result.sourceCount} สูตร (${extension})`
-                );
-            } catch (err) {
-                console.error('Import backup error:', err);
-
-                window.showToast(
-                    err?.message || 'การนำเข้าข้อมูลสำรองไม่สำเร็จ',
-                    'error'
-                );
-            } finally {
-                resetInput();
-            }
+            reader.readAsText(file, 'UTF-8');
         };
 
         window.renderApp = () => {
