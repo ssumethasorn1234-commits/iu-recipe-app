@@ -169,12 +169,12 @@
                 </div>
                 <p class="text-xs text-slate-500 leading-relaxed">คุณสามารถดาวน์โหลดไฟล์สำรองเก็บไว้ หรือนำไฟล์จากเครื่องอื่นมานำเข้าได้ที่นี่</p>
                 <div class="space-y-2">
-                    <button onclick="exportRecipesJSON()" class="w-full py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
+                    <button type="button" onclick="exportRecipesJSON()" class="w-full py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
                         <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Export JSON)
                     </button>
                     <label class="w-full py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
-                        <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (Import JSON)
-                        <input type="file" accept=".json,application/json,.txt,text/plain" class="hidden" onchange="importRecipesJSON(event)">
+                        <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (.TXT / .JSON)
+                        <input type="file" accept=".txt,text/plain,.json,application/json" class="hidden" onchange="importRecipesJSON(event)">
                     </label>
                 </div>
             </div>
@@ -630,32 +630,119 @@
             };
         };
 
-        window.downloadTextFile = (filename, content, mimeType = 'application/json') => {
+        /*
+         * Save a backup file.
+         * 1) On browsers supporting the File System Access API (mainly
+         *    Chromium on Windows/Android), show the native "Save As" dialog.
+         * 2) On iOS/Safari and unsupported browsers, fall back to a normal
+         *    browser download so the backup is still usable.
+         */
+        /*
+         * Cross-platform backup saving
+         * ------------------------------------------------------------
+         * Priority:
+         * 1) Desktop browsers with File System Access API:
+         *    native "Save As" dialog.
+         * 2) Mobile browsers with Web Share API:
+         *    open the native Share/Save sheet so the user can choose
+         *    Files, Downloads, Drive, etc. instead of silently saving.
+         * 3) Normal browser download as final fallback.
+         *
+         * Important:
+         * Mobile browsers do not expose a universal "Save As" folder
+         * picker to web pages. The Web Share API is the closest native
+         * cross-platform solution and lets the user choose the destination
+         * through the phone's own Files/Share UI.
+         */
+        window.saveBackupFile = async (filename, content, mimeType = 'application/json') => {
+            const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+
+            // ---------------------------------------------------------
+            // 1) Desktop / supported Chromium: native Save As dialog
+            // ---------------------------------------------------------
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: filename,
+                        types: [{
+                            description: 'IU Recipes Backup Text File',
+                            accept: {
+                                'text/plain': ['.txt']
+                            }
+                        }]
+                    });
+
+                    const writable = await handle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+
+                    return { saved: true, method: 'picker' };
+                } catch (err) {
+                    if (err && err.name === 'AbortError') {
+                        return { saved: false, cancelled: true };
+                    }
+                    console.warn('Save As dialog failed:', err);
+                }
+            }
+
+            // ---------------------------------------------------------
+            // 2) Mobile: native Share / Save sheet
+            //    This is especially useful on iPhone/iPad.
+            // ---------------------------------------------------------
             try {
-                const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+                const file = new File([blob], filename, {
+                    type: mimeType,
+                    lastModified: Date.now()
+                });
+
+                if (
+                    typeof navigator.share === 'function' &&
+                    (!navigator.canShare || navigator.canShare({ files: [file] }))
+                ) {
+                    await navigator.share({
+                        title: 'สำรองข้อมูลสูตร',
+                        text: 'ไฟล์สำรองสูตร IU Recipes',
+                        files: [file]
+                    });
+
+                    return { saved: true, method: 'share' };
+                }
+            } catch (err) {
+                // User closed the share sheet.
+                if (err && err.name === 'AbortError') {
+                    return { saved: false, cancelled: true };
+                }
+                console.warn('Mobile Share/Save failed:', err);
+            }
+
+            // ---------------------------------------------------------
+            // 3) Final fallback: browser download
+            // ---------------------------------------------------------
+            try {
                 const url = URL.createObjectURL(blob);
                 const anchor = document.createElement('a');
 
                 anchor.href = url;
                 anchor.download = filename;
+                anchor.rel = 'noopener';
                 anchor.style.display = 'none';
+
                 document.body.appendChild(anchor);
                 anchor.click();
 
-                // Give Safari/iOS time to start the download before cleanup.
                 setTimeout(() => {
                     anchor.remove();
                     URL.revokeObjectURL(url);
-                }, 1500);
+                }, 2000);
 
-                return true;
+                return { saved: true, method: 'download' };
             } catch (err) {
                 console.error('Backup download error:', err);
-                return false;
+                return { saved: false, error: err };
             }
         };
 
-        window.exportRecipesJSON = () => {
+        window.exportRecipesJSON = async () => {
             try {
                 const payload = window.createBackupPayload();
                 const json = JSON.stringify(payload, null, 2);
@@ -666,18 +753,35 @@
                     '-' + String(date.getMonth() + 1).padStart(2, '0') +
                     '-' + String(date.getDate()).padStart(2, '0');
 
-                const filename = `IU_Recipes_Backup_${dateText}.json`;
+                const filename = `IU_Recipes_Backup_${dateText}.txt`;
 
-                const ok = window.downloadTextFile(filename, json, 'application/json');
-                if (!ok) {
-                    throw new Error('ไม่สามารถสร้างไฟล์สำรองได้');
+                const result = await window.saveBackupFile(
+                    filename,
+                    json,
+                    'text/plain'
+                );
+
+                if (result.cancelled) {
+                    window.showToast('ยกเลิกการบันทึกไฟล์สำรอง');
+                    return;
+                }
+
+                if (!result.saved) {
+                    throw new Error('ไม่สามารถบันทึกไฟล์สำรองได้');
                 }
 
                 window.closeModal('backup-modal');
-                window.showToast(`ส่งออกข้อมูลสำเร็จ (${window.recipes.length} สูตร)`);
+
+                if (result.method === 'picker') {
+                    window.showToast('เลือกตำแหน่งบันทึกไฟล์สำเร็จ');
+                } else if (result.method === 'share') {
+                    window.showToast('เปิดหน้าต่างเลือกตำแหน่งบันทึกแล้ว');
+                } else {
+                    window.showToast('สร้างไฟล์สำรองแล้ว กรุณาตรวจสอบ Downloads');
+                }
             } catch (err) {
                 console.error('Export error:', err);
-                window.showToast('ส่งออกไฟล์สำรองไม่สำเร็จ', 'error');
+                window.showToast('ส่งออกไฟล์สำรอง .txt ไม่สำเร็จ', 'error');
             }
         };
 
@@ -712,7 +816,9 @@
             };
         };
 
-        window.parseBackupData = (rawText) => {
+        // TXT backup files contain UTF-8 JSON text internally.
+        // Import therefore uses the same JSON parser for both .txt and .json.
+                window.parseBackupData = (rawText) => {
             if (typeof rawText !== 'string' || !rawText.trim()) {
                 throw new Error('ไฟล์ว่าง');
             }
