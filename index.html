@@ -170,7 +170,7 @@
                 <p class="text-xs text-slate-500 leading-relaxed">คุณสามารถดาวน์โหลดไฟล์สำรองเก็บไว้ หรือนำไฟล์จากเครื่องอื่นมานำเข้าได้ที่นี่</p>
                 <div class="space-y-2">
                     <button type="button" onclick="exportRecipesJSON()" class="w-full py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Export JSON)
+                        <i class="fa-solid fa-download"></i> ส่งออกข้อมูล (Backup .TXT)
                     </button>
                     <label class="w-full py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
                         <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (.TXT / .JSON)
@@ -790,79 +790,189 @@
                 return null;
             }
 
-            return {
-                id: typeof recipe.id === 'string' && recipe.id.trim()
-                    ? recipe.id
-                    : `imported-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-                name: typeof recipe.name === 'string' ? recipe.name : '',
-                description: typeof recipe.description === 'string' ? recipe.description : '',
-                coverImage: typeof recipe.coverImage === 'string' ? recipe.coverImage : '',
-                steps: Array.isArray(recipe.steps) ? recipe.steps.map(step => ({
-                    stepName: typeof step?.stepName === 'string' ? step.stepName : '',
-                    details: typeof step?.details === 'string' ? step.details : '',
-                    youtubeUrl: typeof step?.youtubeUrl === 'string' ? step.youtubeUrl : '',
-                    images: Array.isArray(step?.images)
-                        ? step.images.filter(img => typeof img === 'string')
-                        : [],
-                    ingredients: Array.isArray(step?.ingredients)
-                        ? step.ingredients.map(ing => ({
-                            name: typeof ing?.name === 'string' ? ing.name : '',
-                            qty: ing?.qty ?? '',
-                            unit: typeof ing?.unit === 'string' ? ing.unit : '',
-                            image: typeof ing?.image === 'string' ? ing.image : ''
-                        }))
-                        : []
-                })) : []
-            };
-        };
+            // Preserve the complete recipe object instead of dropping any
+            // future/custom fields that may exist in a backup file.
+            const normalized = JSON.parse(JSON.stringify(recipe));
 
-        // TXT backup files contain UTF-8 JSON text internally.
-        // Import therefore uses the same JSON parser for both .txt and .json.
-                window.parseBackupData = (rawText) => {
-            if (typeof rawText !== 'string' || !rawText.trim()) {
-                throw new Error('ไฟล์ว่าง');
+            if (!normalized.id || typeof normalized.id !== 'string') {
+                normalized.id =
+                    `imported-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 7)}`;
             }
 
-            // Remove UTF-8 BOM if created by another editor/app.
-            const cleanText = rawText.replace(/^\uFEFF/, '').trim();
-            const parsed = JSON.parse(cleanText);
+            if (typeof normalized.name !== 'string') normalized.name = '';
+            if (typeof normalized.description !== 'string') normalized.description = '';
+            if (typeof normalized.coverImage !== 'string') normalized.coverImage = '';
+            if (!Array.isArray(normalized.steps)) normalized.steps = [];
+
+            normalized.steps = normalized.steps.map(step => {
+                const item = (step && typeof step === 'object' && !Array.isArray(step))
+                    ? JSON.parse(JSON.stringify(step))
+                    : {};
+
+                if (typeof item.stepName !== 'string') item.stepName = '';
+                if (typeof item.details !== 'string') item.details = '';
+                if (typeof item.youtubeUrl !== 'string') item.youtubeUrl = '';
+                if (!Array.isArray(item.images)) item.images = [];
+                if (!Array.isArray(item.ingredients)) item.ingredients = [];
+
+                item.images = item.images.filter(img => typeof img === 'string');
+
+                item.ingredients = item.ingredients.map(ing => {
+                    const ingredient =
+                        (ing && typeof ing === 'object' && !Array.isArray(ing))
+                            ? JSON.parse(JSON.stringify(ing))
+                            : {};
+
+                    if (typeof ingredient.name !== 'string') ingredient.name = '';
+                    if (ingredient.qty === undefined || ingredient.qty === null) ingredient.qty = '';
+                    if (typeof ingredient.unit !== 'string') ingredient.unit = '';
+                    if (typeof ingredient.image !== 'string') ingredient.image = '';
+
+                    return ingredient;
+                });
+
+                return item;
+            });
+
+            return normalized;
+        };
+
+        /*
+         * Robust Backup Parser
+         * ------------------------------------------------------------
+         * Accepts:
+         * - New IU backup TXT/JSON envelope
+         * - Old backup JSON array
+         * - JSON object containing { recipes: [...] }
+         * - A JSON string that itself contains JSON
+         * - UTF-8 / UTF-16 files with BOM
+         * - TXT files copied from editors with ```json code fences
+         */
+        window.decodeBackupFile = async (file) => {
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+
+            let encoding = 'utf-8';
+
+            if (bytes.length >= 2 &&
+                bytes[0] === 0xFF && bytes[1] === 0xFE) {
+                encoding = 'utf-16le';
+            } else if (bytes.length >= 2 &&
+                       bytes[0] === 0xFE && bytes[1] === 0xFF) {
+                encoding = 'utf-16be';
+            }
+
+            const decoder = new TextDecoder(encoding, { fatal: false });
+            return decoder.decode(buffer).replace(/^\uFEFF/, '');
+        };
+
+        window.cleanBackupText = (text) => {
+            if (typeof text !== 'string') return '';
+
+            let clean = text
+                .replace(/^\uFEFF/, '')
+                .replace(/\u0000/g, '')
+                .trim();
+
+            // Remove Markdown code fences if a user saved the JSON from
+            // an editor/chat as a TXT file.
+            clean = clean
+                .replace(/^```(?:json|JSON|txt|TXT)?\s*/i, '')
+                .replace(/\s*```$/i, '')
+                .trim();
+
+            return clean;
+        };
+
+        window.parseBackupData = (rawText) => {
+            const cleanText = window.cleanBackupText(rawText);
+
+            if (!cleanText) {
+                throw new Error('ไฟล์สำรองว่างเปล่า');
+            }
+
+            let parsed;
+
+            try {
+                parsed = JSON.parse(cleanText);
+            } catch (firstError) {
+                // Some mobile/editor applications may wrap the complete
+                // JSON document as a JSON string. Try one extra decode.
+                try {
+                    const unwrapped = JSON.parse(JSON.stringify(cleanText));
+                    parsed = JSON.parse(unwrapped);
+                } catch (secondError) {
+                    console.error('Backup JSON parse error:', firstError);
+                    throw new Error(
+                        'ไฟล์ไม่ใช่ข้อมูลสำรอง IU Recipes ที่ถูกต้อง หรือไฟล์เสียหาย'
+                    );
+                }
+            }
+
+            // If the first JSON value is itself a JSON string, decode again.
+            if (typeof parsed === 'string') {
+                const nestedText = window.cleanBackupText(parsed);
+                try {
+                    parsed = JSON.parse(nestedText);
+                } catch (err) {
+                    throw new Error('โครงสร้างข้อมูลสำรองไม่ถูกต้อง');
+                }
+            }
 
             let importedRecipes = null;
             let importedSettings = null;
 
-            // New backup format.
+            // ---------------------------------------------------------
+            // New backup envelope:
+            // {
+            //   format: "iu-recipes-backup",
+            //   version: 1,
+            //   recipes: [...]
+            // }
+            // ---------------------------------------------------------
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                if (parsed.format === BACKUP_FORMAT || Array.isArray(parsed.recipes)) {
+                if (Array.isArray(parsed.recipes)) {
                     importedRecipes = parsed.recipes;
-                    importedSettings = parsed.storeSettings || null;
+                    importedSettings =
+                        parsed.storeSettings &&
+                        typeof parsed.storeSettings === 'object'
+                            ? parsed.storeSettings
+                            : null;
                 }
             }
 
-            // Backward compatibility with the original export format:
-            // the entire JSON file was an array of recipes.
+            // ---------------------------------------------------------
+            // Old format:
+            // [ recipe1, recipe2, ... ]
+            // ---------------------------------------------------------
             if (Array.isArray(parsed)) {
                 importedRecipes = parsed;
             }
 
             if (!Array.isArray(importedRecipes)) {
-                throw new Error('ไม่พบข้อมูลสูตรในไฟล์สำรอง');
+                throw new Error(
+                    'ไม่พบรายการสูตรในไฟล์สำรอง (รองรับ .TXT และ .JSON)'
+                );
             }
 
-            const recipes = importedRecipes
-                .map((recipe, index) => window.normalizeImportedRecipe(recipe, index))
-                .filter(Boolean);
+            const recipes = importedRecipes.map((recipe, index) => {
+                const normalized = window.normalizeImportedRecipe(recipe, index);
 
-            if (recipes.length !== importedRecipes.length) {
-                throw new Error('ข้อมูลสูตรบางรายการไม่ถูกต้อง');
-            }
+                if (!normalized) {
+                    throw new Error(`ข้อมูลสูตรรายการที่ ${index + 1} ไม่ถูกต้อง`);
+                }
+
+                return normalized;
+            });
 
             return {
                 recipes,
-                storeSettings: importedSettings
+                storeSettings: importedSettings,
+                sourceCount: importedRecipes.length
             };
         };
 
-        window.importRecipesJSON = (event) => {
+        window.importRecipesJSON = async (event) => {
             const input = event?.target;
             const file = input?.files?.[0];
 
@@ -872,62 +982,79 @@
                 if (input) input.value = '';
             };
 
-            const reader = new FileReader();
+            try {
+                window.showToast('กำลังอ่านไฟล์สำรอง...', 'info');
 
-            reader.onerror = () => {
-                resetInput();
-                window.showToast('ไม่สามารถอ่านไฟล์สำรองได้', 'error');
-            };
+                const rawText = await window.decodeBackupFile(file);
+                const result = window.parseBackupData(rawText);
 
-            reader.onload = async (e) => {
-                try {
-                    const result = window.parseBackupData(e.target.result);
+                if (!result.recipes.length) {
+                    throw new Error('ไฟล์สำรองไม่มีสูตรสำหรับนำเข้า');
+                }
 
-                    // Replace the current data only after the complete file
-                    // has been parsed and validated.
-                    window.recipes = result.recipes;
+                // Keep the current data untouched until the backup has
+                // successfully passed all validation.
+                const importedRecipes = result.recipes;
 
-                    // Restore store settings when included in the backup.
-                    if (result.storeSettings && typeof result.storeSettings === 'object') {
-                        if (typeof result.storeSettings.storeName === 'string' &&
-                            result.storeSettings.storeName.trim()) {
-                            window.storeName = result.storeSettings.storeName.trim();
-                        }
-
-                        if (typeof result.storeSettings.storeLogo === 'string') {
-                            window.storeLogo = result.storeSettings.storeLogo;
-                        }
-
-                        window.safeStore.setItem('iu_store_settings', JSON.stringify({
-                            storeName: window.storeName,
-                            storeLogo: window.storeLogo
-                        }));
-                        window.updateHeaderUI();
+                // Restore store settings if present.
+                if (result.storeSettings && typeof result.storeSettings === 'object') {
+                    if (typeof result.storeSettings.storeName === 'string' &&
+                        result.storeSettings.storeName.trim()) {
+                        window.storeName = result.storeSettings.storeName.trim();
                     }
 
-                    // Save locally first so imported data survives reload even
-                    // if Google Sheets/Firebase is unavailable.
-                    window.safeStore.setItem('iu_recipes', JSON.stringify(window.recipes));
+                    if (typeof result.storeSettings.storeLogo === 'string') {
+                        window.storeLogo = result.storeSettings.storeLogo;
+                    }
 
-                    // Then use the existing cloud / Google Sheets sync.
-                    await window.saveData();
-
-                    window.renderApp();
-                    window.closeModal('backup-modal');
-
-                    window.showToast(`นำเข้าข้อมูลสำเร็จ (${window.recipes.length} สูตร)`);
-                } catch (err) {
-                    console.error('Import error:', err);
-                    window.showToast(
-                        err?.message || 'ไม่สามารถนำเข้าไฟล์สำรองได้',
-                        'error'
+                    window.safeStore.setItem(
+                        'iu_store_settings',
+                        JSON.stringify({
+                            storeName: window.storeName,
+                            storeLogo: window.storeLogo
+                        })
                     );
-                } finally {
-                    resetInput();
-                }
-            };
 
-            reader.readAsText(file, 'UTF-8');
+                    window.updateHeaderUI();
+                }
+
+                // Save the imported data locally first.
+                window.recipes = importedRecipes;
+                window.safeStore.setItem(
+                    'iu_recipes',
+                    JSON.stringify(window.recipes)
+                );
+
+                // Sync to the existing cloud/Google Sheets layer.
+                try {
+                    await window.saveData();
+                } catch (syncError) {
+                    console.warn('Import cloud sync warning:', syncError);
+                    // Local import is already complete. Do not report the
+                    // import itself as failed because cloud sync failed.
+                }
+
+                window.renderApp();
+                window.closeModal('backup-modal');
+
+                const extension =
+                    (file.name || '').toLowerCase().endsWith('.json')
+                        ? '.JSON'
+                        : '.TXT';
+
+                window.showToast(
+                    `นำเข้าข้อมูลสำเร็จ ${result.sourceCount} สูตร (${extension})`
+                );
+            } catch (err) {
+                console.error('Import backup error:', err);
+
+                window.showToast(
+                    err?.message || 'การนำเข้าข้อมูลสำรองไม่สำเร็จ',
+                    'error'
+                );
+            } finally {
+                resetInput();
+            }
         };
 
         window.renderApp = () => {
