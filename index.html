@@ -174,7 +174,7 @@
                     </button>
                     <label class="w-full py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer">
                         <i class="fa-solid fa-upload"></i> นำเข้าข้อมูล (Import JSON)
-                        <input type="file" accept=".json" class="hidden" onchange="importRecipesJSON(event)">
+                        <input type="file" accept=".json,application/json,.txt,text/plain" class="hidden" onchange="importRecipesJSON(event)">
                     </label>
                 </div>
             </div>
@@ -602,39 +602,226 @@
             window.openModal('image-preview-modal');
         };
 
+        /*
+         * Cross-platform Backup / Restore
+         * ------------------------------------------------------------
+         * Backup format: JSON (UTF-8)
+         * - Works with Android, iPhone/iPad (iOS), Windows and macOS browsers.
+         * - Uses Blob + object URL instead of a data: URL, which is more
+         *   reliable for larger files and mobile browsers.
+         * - Includes recipes + store settings.
+         * - Import remains backward compatible with the old format where
+         *   the file contains only an array of recipes.
+         */
+        const BACKUP_FORMAT = 'iu-recipes-backup';
+        const BACKUP_VERSION = 1;
+
+        window.createBackupPayload = () => {
+            return {
+                format: BACKUP_FORMAT,
+                version: BACKUP_VERSION,
+                app: 'IU Recipe Work Instruction Web App',
+                exportedAt: new Date().toISOString(),
+                storeSettings: {
+                    storeName: window.storeName || 'IU Recipes',
+                    storeLogo: window.storeLogo || ''
+                },
+                recipes: Array.isArray(window.recipes) ? window.recipes : []
+            };
+        };
+
+        window.downloadTextFile = (filename, content, mimeType = 'application/json') => {
+            try {
+                const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+                const url = URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+
+                anchor.href = url;
+                anchor.download = filename;
+                anchor.style.display = 'none';
+                document.body.appendChild(anchor);
+                anchor.click();
+
+                // Give Safari/iOS time to start the download before cleanup.
+                setTimeout(() => {
+                    anchor.remove();
+                    URL.revokeObjectURL(url);
+                }, 1500);
+
+                return true;
+            } catch (err) {
+                console.error('Backup download error:', err);
+                return false;
+            }
+        };
+
         window.exportRecipesJSON = () => {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(window.recipes, null, 2));
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `IU_Recipes_Backup_${new Date().toISOString().slice(0,10)}.json`);
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            window.closeModal('backup-modal');
-            window.showToast('ส่งออกไฟล์สำรองสูตรสำเร็จ');
+            try {
+                const payload = window.createBackupPayload();
+                const json = JSON.stringify(payload, null, 2);
+
+                const date = new Date();
+                const dateText =
+                    date.getFullYear() +
+                    '-' + String(date.getMonth() + 1).padStart(2, '0') +
+                    '-' + String(date.getDate()).padStart(2, '0');
+
+                const filename = `IU_Recipes_Backup_${dateText}.json`;
+
+                const ok = window.downloadTextFile(filename, json, 'application/json');
+                if (!ok) {
+                    throw new Error('ไม่สามารถสร้างไฟล์สำรองได้');
+                }
+
+                window.closeModal('backup-modal');
+                window.showToast(`ส่งออกข้อมูลสำเร็จ (${window.recipes.length} สูตร)`);
+            } catch (err) {
+                console.error('Export error:', err);
+                window.showToast('ส่งออกไฟล์สำรองไม่สำเร็จ', 'error');
+            }
+        };
+
+        window.normalizeImportedRecipe = (recipe, index = 0) => {
+            if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) {
+                return null;
+            }
+
+            return {
+                id: typeof recipe.id === 'string' && recipe.id.trim()
+                    ? recipe.id
+                    : `imported-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+                name: typeof recipe.name === 'string' ? recipe.name : '',
+                description: typeof recipe.description === 'string' ? recipe.description : '',
+                coverImage: typeof recipe.coverImage === 'string' ? recipe.coverImage : '',
+                steps: Array.isArray(recipe.steps) ? recipe.steps.map(step => ({
+                    stepName: typeof step?.stepName === 'string' ? step.stepName : '',
+                    details: typeof step?.details === 'string' ? step.details : '',
+                    youtubeUrl: typeof step?.youtubeUrl === 'string' ? step.youtubeUrl : '',
+                    images: Array.isArray(step?.images)
+                        ? step.images.filter(img => typeof img === 'string')
+                        : [],
+                    ingredients: Array.isArray(step?.ingredients)
+                        ? step.ingredients.map(ing => ({
+                            name: typeof ing?.name === 'string' ? ing.name : '',
+                            qty: ing?.qty ?? '',
+                            unit: typeof ing?.unit === 'string' ? ing.unit : '',
+                            image: typeof ing?.image === 'string' ? ing.image : ''
+                        }))
+                        : []
+                })) : []
+            };
+        };
+
+        window.parseBackupData = (rawText) => {
+            if (typeof rawText !== 'string' || !rawText.trim()) {
+                throw new Error('ไฟล์ว่าง');
+            }
+
+            // Remove UTF-8 BOM if created by another editor/app.
+            const cleanText = rawText.replace(/^\uFEFF/, '').trim();
+            const parsed = JSON.parse(cleanText);
+
+            let importedRecipes = null;
+            let importedSettings = null;
+
+            // New backup format.
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                if (parsed.format === BACKUP_FORMAT || Array.isArray(parsed.recipes)) {
+                    importedRecipes = parsed.recipes;
+                    importedSettings = parsed.storeSettings || null;
+                }
+            }
+
+            // Backward compatibility with the original export format:
+            // the entire JSON file was an array of recipes.
+            if (Array.isArray(parsed)) {
+                importedRecipes = parsed;
+            }
+
+            if (!Array.isArray(importedRecipes)) {
+                throw new Error('ไม่พบข้อมูลสูตรในไฟล์สำรอง');
+            }
+
+            const recipes = importedRecipes
+                .map((recipe, index) => window.normalizeImportedRecipe(recipe, index))
+                .filter(Boolean);
+
+            if (recipes.length !== importedRecipes.length) {
+                throw new Error('ข้อมูลสูตรบางรายการไม่ถูกต้อง');
+            }
+
+            return {
+                recipes,
+                storeSettings: importedSettings
+            };
         };
 
         window.importRecipesJSON = (event) => {
-            const file = event.target.files[0];
+            const input = event?.target;
+            const file = input?.files?.[0];
+
             if (!file) return;
+
+            const resetInput = () => {
+                if (input) input.value = '';
+            };
+
             const reader = new FileReader();
-            reader.onload = (e) => {
+
+            reader.onerror = () => {
+                resetInput();
+                window.showToast('ไม่สามารถอ่านไฟล์สำรองได้', 'error');
+            };
+
+            reader.onload = async (e) => {
                 try {
-                    const imported = JSON.parse(e.target.result);
-                    if (Array.isArray(imported)) {
-                        window.recipes = imported;
-                        window.saveData();
-                        window.renderApp();
-                        window.closeModal('backup-modal');
-                        window.showToast('นำเข้าสูตรเรียบร้อยแล้ว');
-                    } else {
-                        window.showToast('รูปแบบไฟล์ไม่ถูกต้อง', 'error');
+                    const result = window.parseBackupData(e.target.result);
+
+                    // Replace the current data only after the complete file
+                    // has been parsed and validated.
+                    window.recipes = result.recipes;
+
+                    // Restore store settings when included in the backup.
+                    if (result.storeSettings && typeof result.storeSettings === 'object') {
+                        if (typeof result.storeSettings.storeName === 'string' &&
+                            result.storeSettings.storeName.trim()) {
+                            window.storeName = result.storeSettings.storeName.trim();
+                        }
+
+                        if (typeof result.storeSettings.storeLogo === 'string') {
+                            window.storeLogo = result.storeSettings.storeLogo;
+                        }
+
+                        window.safeStore.setItem('iu_store_settings', JSON.stringify({
+                            storeName: window.storeName,
+                            storeLogo: window.storeLogo
+                        }));
+                        window.updateHeaderUI();
                     }
+
+                    // Save locally first so imported data survives reload even
+                    // if Google Sheets/Firebase is unavailable.
+                    window.safeStore.setItem('iu_recipes', JSON.stringify(window.recipes));
+
+                    // Then use the existing cloud / Google Sheets sync.
+                    await window.saveData();
+
+                    window.renderApp();
+                    window.closeModal('backup-modal');
+
+                    window.showToast(`นำเข้าข้อมูลสำเร็จ (${window.recipes.length} สูตร)`);
                 } catch (err) {
-                    window.showToast('อ่านไฟล์ JSON ไม่สำเร็จ', 'error');
+                    console.error('Import error:', err);
+                    window.showToast(
+                        err?.message || 'ไม่สามารถนำเข้าไฟล์สำรองได้',
+                        'error'
+                    );
+                } finally {
+                    resetInput();
                 }
             };
-            reader.readAsText(file);
+
+            reader.readAsText(file, 'UTF-8');
         };
 
         window.renderApp = () => {
